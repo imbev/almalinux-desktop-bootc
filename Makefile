@@ -6,7 +6,6 @@ VARIANT = gnome
 ARCH = x86_64
 
 .PHONY: \
-	all \
 	bootc-image \
 	installer \
 	clean
