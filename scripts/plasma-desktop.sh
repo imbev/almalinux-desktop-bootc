@@ -3,6 +3,7 @@
 set -euo pipefail
 
 dnf install -y \
-    @"KDE Plasma Workspaces"
+    @"KDE Plasma Workspaces" \
+    falkon
 
 systemctl enable sddm
