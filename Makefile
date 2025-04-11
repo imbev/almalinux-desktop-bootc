@@ -11,10 +11,6 @@ ARCH = x86_64
 	installer \
 	clean
 
-all:
-	$(MAKE) bootc-image
-	$(MAKE) VARIANT=plasma bootc-image
-
 bootc-image:
 	$(PODMAN) build \
 		-t quay.io/almalinuxorg/almalinux-bootc:$(MAJOR)-$(VARIANT)-bootc \
