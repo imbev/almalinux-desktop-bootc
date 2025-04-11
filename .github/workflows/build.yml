@@ -119,6 +119,7 @@ jobs:
         VARIANT: ${{fromJson(needs.set-versions-matrix.outputs.matrix).VARIANT}}
     env:
       DATE_STAMP: ${{ needs.set-versions-matrix.outputs.date_stamp }}
+      IMAGE_NAME: almalinux-${{ matrix.VARIANT }}
 
     steps:
       - name: Set environment
@@ -174,3 +175,46 @@ jobs:
 
               docker manifest push ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${tag}
           done
+
+  build-iso:
+    if: ${{ always() && contains(join(needs.*.result, ','), 'success') }}
+    name: Build ISO
+    needs: [set-versions-matrix, build]
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix: ${{fromJson(needs.set-versions-matrix.outputs.matrix)}}
+    env:
+      DATE_STAMP: ${{ needs.set-versions-matrix.outputs.date_stamp }}
+      IMAGE_NAME: almalinux-${{ matrix.VARIANT }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Build ISO
+        id: build
+        uses: ublue-os/titanoboa@anaconda-webui-format
+        with:
+          image-ref: ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ matrix.VERSION_MAJOR }}-${{ env.DATE_STAMP }}-${{ matrix.PLATFORM }}
+          hook-post-rootfs: ${{ github.workspace }}/iso_files/configure_iso.sh
+
+      - name: Rename ISO
+        id: rename
+        env:
+          OUTPUT_PATH: ${{ steps.build.outputs.iso-dest }}
+        run: |
+          set -x
+          mkdir -p output
+          OUTPUT_DIRECTORY="$(realpath output)"
+          ISO_NAME="${{ env.IMAGE_NAME }}-${{ env.DATE_STAMP }}-${{ matrix.PLATFORM }}.iso"
+          sha256sum "${OUTPUT_PATH}" | tee "${OUTPUT_DIRECTORY}/${ISO_NAME}-CHECKSUM"
+          mv "${OUTPUT_PATH}" "${OUTPUT_DIRECTORY}/${ISO_NAME}"
+          echo "output_directory=$OUTPUT_DIRECTORY" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload to Job Artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ env.IMAGE_NAME }}-${{ env.DATE_STAMP }}-${{ matrix.platform }}-iso
+          if-no-files-found: error
+          path: ${{ steps.rename.outputs.output_directory }}
