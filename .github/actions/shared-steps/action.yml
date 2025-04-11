@@ -1,0 +1,96 @@
+name: "Build and Push"
+
+inputs:
+  IMAGE_NAME:
+    required: true
+  VERSION_MAJOR:
+    required: true
+  VARIANT:
+    required: true
+  DATE_STAMP:
+    required: true
+  IMAGE_REGISTRY:
+    required: true
+  IMAGE_DEST:
+    required: true
+  REGISTRY_USER:
+    required: true
+  REGISTRY_PASSWORD:
+    required: true
+runs:
+  using: "composite"
+  steps:
+    - name: Prepare environment
+      shell: bash
+      run: |
+        # Platform / arch
+        platform="${{ env.PLATFORM }}"
+        ARCH=${platform#linux/}
+        [ "x${ARCH}" != "x" ] && echo "ARCH=${ARCH}" >> "$GITHUB_ENV"
+
+        # Platform / machine
+        MACHINE=x86_64
+        [ "$ARCH" = "arm64" ] && MACHINE=aarch64
+        echo "MACHINE=${MACHINE}" >> "$GITHUB_ENV"
+
+        # Minor version
+        VERSION_MINOR=
+        if [[ ${{ inputs.VERSION_MAJOR }} != *'kitten'* ]]; then
+          almalinux_release=https://repo.almalinux.org/almalinux/almalinux-release-latest-${{ inputs.VERSION_MAJOR }}.${MACHINE}.rpm
+          # TODO: remove when AlmaLinux 10.0 is released
+          [ "${{ inputs.VERSION_MAJOR }}" = "10" ] && almalinux_release=https://vault.almalinux.org/almalinux-release-latest-10-beta.${MACHINE}.rpm
+          release=$(rpm -q --qf="%{VERSION}\n" ${almalinux_release} 2>/dev/null)
+          VERSION_MINOR=.$(cut -d '.' -f 2 <<< "$release")
+        fi
+        echo "VERSION_MINOR=${VERSION_MINOR}" >> "$GITHUB_ENV"
+
+    # Need to rewrite this to figure out if the image of that date is already built instead
+    - name: Check update
+      shell: bash
+      run: |
+        # 'dnf check-update'
+        # exit codes:
+        #   0 - no updates
+        #   100 - updates available
+        #   125 - tag/platform not found
+        #   127 - command not found
+        # res=0
+        # podman run --quiet --rm ${{ inputs.IMAGE_REGISTRY }}/${{ inputs.IMAGE_NAME }}:${{ inputs.VERSION_MAJOR }} dnf check-update || res=$?
+        # echo "res=${res}" >> "$GITHUB_ENV"
+        # echo "Exit code: '$res'"
+        echo "res=-1" >> "$GITHUB_ENV"
+
+    - name: Build image
+      if: ${{ env.res != 0 }}
+      shell: bash
+      run: |
+        podman build \
+          --platform=${{ env.PLATFORM }} \
+          --security-opt=label=disable \
+          --cap-add=all \
+          --device /dev/fuse \
+          -t ${{ inputs.IMAGE_NAME }} \
+          -f ${{ inputs.VERSION_MAJOR }}/${{ inputs.VARIANT }}/Containerfile \
+        .
+
+    - name: Run Image
+      if: ${{ env.res != 0 }}
+      shell: bash
+      run: podman run --rm -ti ${{ inputs.IMAGE_NAME }} bootc --version
+
+    - name: Log in to registry
+      if: ${{ env.res != 0 }}
+      shell: bash
+      run: podman login ${{ inputs.IMAGE_REGISTRY }} -u ${{ inputs.REGISTRY_USER }} -p ${{ inputs.REGISTRY_PASSWORD }}
+
+    - name: Push to registry
+      if: ${{ env.res != 0 }}
+      shell: bash
+      run: |
+        # Tag: VERSION_MAJOR.VERSION_MINOR-DATE_STAMP-ARCH
+        podman push ${{ inputs.IMAGE_NAME }} --digestfile=/tmp/digestfile \
+          docker://${{ inputs.IMAGE_DEST }}/${{ inputs.IMAGE_NAME }}:${{ inputs.VERSION_MAJOR }}${{ env.VERSION_MINOR }}-${{ inputs.DATE_STAMP }}-${{ env.ARCH }}
+
+        DIGEST=$(cat /tmp/digestfile)
+        echo "DIGEST=$DIGEST" >> $GITHUB_OUTPUT
+        echo "IMAGE=$IMAGE_REGISTRY/$IMAGE_NAME" >> $GITHUB_OUTPUT

@@ -13,14 +13,14 @@ ARCH = x86_64
 bootc-image:
 	$(PODMAN) build \
 		-t quay.io/almalinuxorg/almalinux-bootc:$(MAJOR)-$(VARIANT)-bootc \
-		-f almalinux-$(MAJOR)-$(VARIANT)-bootc.Containerfile \
+		-f $(MAJOR)/$(VARIANT)/Containerfile \
 		.
 
 installer:
 	curl \
 		-LO \
 		https://repo.almalinux.org/almalinux/10.0-beta/isos/$(ARCH)/AlmaLinux-10-latest-beta-$(ARCH)-boot.iso
-	
+
 	echo "f0bf7fb6a81a506a4adc56f2537ae53ee9ad4b7ace1b74cf344a100772e10874 AlmaLinux-10-latest-beta-$(ARCH)-boot.iso" \
 		| sha256sum --check
 
