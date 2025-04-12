@@ -20,30 +20,6 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Prepare environment
-      shell: bash
-      run: |
-        # Platform / arch
-        platform="${{ env.PLATFORM }}"
-        ARCH=${platform#linux/}
-        [ "x${ARCH}" != "x" ] && echo "ARCH=${ARCH}" >> "$GITHUB_ENV"
-
-        # Platform / machine
-        MACHINE=x86_64
-        [ "$ARCH" = "arm64" ] && MACHINE=aarch64
-        echo "MACHINE=${MACHINE}" >> "$GITHUB_ENV"
-
-        # Minor version
-        VERSION_MINOR=
-        if [[ ${{ inputs.VERSION_MAJOR }} != *'kitten'* ]]; then
-          almalinux_release=https://repo.almalinux.org/almalinux/almalinux-release-latest-${{ inputs.VERSION_MAJOR }}.${MACHINE}.rpm
-          # TODO: remove when AlmaLinux 10.0 is released
-          [ "${{ inputs.VERSION_MAJOR }}" = "10" ] && almalinux_release=https://vault.almalinux.org/almalinux-release-latest-10-beta.${MACHINE}.rpm
-          release=$(rpm -q --qf="%{VERSION}\n" ${almalinux_release} 2>/dev/null)
-          VERSION_MINOR=.$(cut -d '.' -f 2 <<< "$release")
-        fi
-        echo "VERSION_MINOR=${VERSION_MINOR}" >> "$GITHUB_ENV"
-
     # Need to rewrite this to figure out if the image of that date is already built instead
     - name: Check update
       shell: bash
@@ -64,19 +40,22 @@ runs:
       if: ${{ env.res != 0 }}
       shell: bash
       run: |
-        podman build \
-          --platform=${{ env.PLATFORM }} \
-          --security-opt=label=disable \
-          --cap-add=all \
-          --device /dev/fuse \
-          -t ${{ inputs.IMAGE_NAME }} \
-          -f ${{ inputs.VERSION_MAJOR }}/${{ inputs.VARIANT }}/Containerfile \
-        .
+        make bootc-image \
+          MAJOR=${{ inputs.VERSION_MAJOR }} \
+          VARIANT=${{ inputs.VARIANT }} \
+          ARCH=${{ env.PLATFORM }} \
+          IMAGE_NAME=${{ inputs.IMAGE_NAME }}
 
     - name: Run Image
       if: ${{ env.res != 0 }}
       shell: bash
-      run: podman run --rm -ti ${{ inputs.IMAGE_NAME }} bootc --version
+      run: |
+        # Let's see if we have something that makes sense
+        podman run --rm -ti ${{ inputs.IMAGE_NAME }} bootc --version
+
+        # Let the image tell you what it is
+        VERSION_ID=$(podman run --rm -ti ${{ inputs.IMAGE_NAME }} grep "^VERSION_ID=" /etc/os-release | cut -d'=' -f2 | tr -d '"')
+        echo "VERSION_ID=${VERSION_ID}" >> "$GITHUB_ENV"
 
     - name: Log in to registry
       if: ${{ env.res != 0 }}
@@ -89,7 +68,7 @@ runs:
       run: |
         # Tag: VERSION_MAJOR.VERSION_MINOR-DATE_STAMP-ARCH
         podman push ${{ inputs.IMAGE_NAME }} --digestfile=/tmp/digestfile \
-          docker://${{ inputs.IMAGE_DEST }}/${{ inputs.IMAGE_NAME }}:${{ inputs.VERSION_MAJOR }}${{ env.VERSION_MINOR }}-${{ inputs.DATE_STAMP }}-${{ env.ARCH }}
+          docker://${{ inputs.IMAGE_DEST }}/${{ inputs.IMAGE_NAME }}:${{ env.VERSION_ID }}-${{ inputs.DATE_STAMP }}-${{ env.ARCH }}
 
         DIGEST=$(cat /tmp/digestfile)
         echo "DIGEST=$DIGEST" >> $GITHUB_OUTPUT

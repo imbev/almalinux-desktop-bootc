@@ -4,6 +4,7 @@ PODMAN = $(SUDO) podman
 MAJOR = 10-kitten
 VARIANT = gnome
 ARCH = x86_64
+IMAGE_NAME ?= almalinux-$(VARIANT)
 
 .PHONY: \
 	bootc-image \
@@ -12,9 +13,13 @@ ARCH = x86_64
 
 bootc-image:
 	$(PODMAN) build \
-		-t quay.io/almalinuxorg/almalinux-bootc:$(MAJOR)-$(VARIANT)-bootc \
+		--platform=$(ARCH) \
+		--security-opt=label=disable \
+		--cap-add=all \
+		--device /dev/fuse \
+		-t $(IMAGE_NAME) \
 		-f $(MAJOR)/$(VARIANT)/Containerfile \
-		.
+        .
 
 installer:
 	curl \
@@ -33,7 +38,6 @@ installer:
 		quay.io/almalinuxorg/almalinux-bootc:10-kitten \
 		/pwd/scripts/installer-patch.sh
 clean:
-	-$(PODMAN) rmi $(IMAGE):10-kitten-gnome-bootc
-	-$(PODMAN) rmi $(IMAGE):10-kitten-plasma-bootc
+	-$(PODMAN) rmi $(IMAGE_NAME)
 	-$(SUDO) rm -rf ./output
 	-$(SUDO) rm ./*.iso
