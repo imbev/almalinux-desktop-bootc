@@ -8,6 +8,7 @@ IMAGE_NAME ?= localhost/almalinux-$(VARIANT)
 IMAGE_TAG ?= latest
 IMAGE_TYPE ?= iso
 IMAGE_CONFIG ?= iso.toml
+IMAGE_REF ?= localhost/almalinux-$(VARIANT):$(IMAGE_TAG)
 
 .PHONY: \
 	bootc \
@@ -46,11 +47,11 @@ installer:
 		quay.io/almalinuxorg/almalinux-bootc:10-kitten \
 		/pwd/scripts/installer-patch.sh
 
-image: bootc
+image:
 	#rm -rf ./output
 	mkdir -p ./output
 
-	IMAGE_NAME=$(IMAGE_NAME) IMAGE_TAG=$(IMAGE_TAG) envsubst < $(IMAGE_CONFIG) > ./output/config.toml
+	IMAGE_REF=$(IMAGE_REF) envsubst < $(IMAGE_CONFIG) > ./output/config.toml
 
 	# AlmaLinux's repos are configured with mirrorlist and apparently that stops you from building ISOs with librepo=true
 	# https://github.com/osbuild/bootc-image-builder/issues/883

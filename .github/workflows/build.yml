@@ -107,6 +107,40 @@ jobs:
         REGISTRY_USER:  ${{ github.actor }} # ${{ secrets.REGISTRY_USER }}
         REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }} # ${{ secrets.REGISTRY_PASSWORD }}
 
+    - name: Build ISO
+      id: build
+      shell: bash
+      run: |
+        sudo podman pull ${{ steps.build_and_push.outputs.IMAGE }}:${{ steps.build_and_push.outputs.DIGEST }}
+
+        make image-iso \
+          IMAGE_NAME=${{ steps.build_and_push.outputs.IMAGE }} \
+          IMAGE_TAG=${{ steps.build_and_push.outputs.DIGEST }} \
+          IMAGE_REF=${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ matrix.VERSION_MAJOR }}
+
+        echo "iso-dest=${{ github.workspace }}/output/bootiso/install.iso" >> "$GITHUB_OUTPUT"
+
+    - name: Rename ISO
+      id: rename
+      shell: bash
+      env:
+        OUTPUT_PATH: ${{ steps.build.outputs.iso-dest }}
+      run: |
+        set -x
+        mkdir -p final_output
+        OUTPUT_DIRECTORY="$(realpath final_output)"
+        ISO_NAME="${{ env.IMAGE_NAME }}-${{ env.DATE_STAMP }}-${{ matrix.PLATFORM }}.iso"
+        sha256sum "${OUTPUT_PATH}" | tee "${OUTPUT_DIRECTORY}/${ISO_NAME}-CHECKSUM"
+        mv "${OUTPUT_PATH}" "${OUTPUT_DIRECTORY}/${ISO_NAME}"
+        echo "output_directory=$OUTPUT_DIRECTORY" >> "${GITHUB_OUTPUT}"
+
+    - name: Upload to Job Artifacts
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: ${{ env.IMAGE_NAME }}-${{ env.DATE_STAMP }}-${{ matrix.platform }}-iso
+        if-no-files-found: error
+        path: ${{ steps.rename.outputs.output_directory }}
+
   push-manifest:
     if: ${{ always() && contains(join(needs.*.result, ','), 'success') }}
     name: Push manifest
@@ -148,73 +182,37 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }} # ${{ secrets.REGISTRY_PASSWORD }}
 
       - name: Create and push manifest (docker)
+        shell: bash
         run:  |
           # Manifest for both amd64 and arm64
           amd64_exists=0
           arm64_exists=0
-          docker manifest inspect ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ matrix.VERSION_MAJOR }}${{ env.VERSION_MINOR_x86_64 }}-${{ env.DATE_STAMP }}-amd64 >/dev/null 2>&1 \
+          docker manifest inspect ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ matrix.VERSION_MAJOR }}-${{ env.DATE_STAMP }}-amd64 >/dev/null 2>&1 \
             || amd64_exists=$?
-          docker manifest inspect ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ matrix.VERSION_MAJOR }}${{ env.VERSION_MINOR_aarch64 }}-${{ env.DATE_STAMP }}-arm64 >/dev/null 2>&1 \
+          docker manifest inspect ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ matrix.VERSION_MAJOR }}-${{ env.DATE_STAMP }}-arm64 >/dev/null 2>&1 \
             || arm64_exists=$?
-          [ $amd64_exists -ne 0 -o $arm64_exists -ne 0 ] && exit 0
+          [ $amd64_exists -ne 0 -a $arm64_exists -ne 0 ] && exit 1
 
           # Don't push manifest if amd64 and arm64 minor versions differ
           VERSION_MINOR=${{ env.VERSION_MINOR_x86_64 }}
-          [ "${{ env.VERSION_MINOR_x86_64 }}" != "${{ env.VERSION_MINOR_aarch64 }}" ] && exit 0
+          [ "${{ env.VERSION_MINOR_x86_64 }}" != "${{ env.VERSION_MINOR_aarch64 }}" ] && exit 2
 
-          # Loop over need tags: latest, VERSION_MAJOR, VERSION_MAJOR.VERSION_MINOR, VERSION_MAJOR.VERSION_MINOR-DATE_STAMP
+          if [ $amd64_exists -eq 0 ]; then
+            manifest_contents="${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ matrix.VERSION_MAJOR }}-${{ env.DATE_STAMP }}-amd64 "
+          fi
+          if [ $arm64_exists -eq 0 ]; then
+            manifest_contents="${manifest_contents} ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ matrix.VERSION_MAJOR }}-${{ env.DATE_STAMP }}-arm64"
+          fi
+
+          # Loop over need tags: latest, VERSION_MAJOR, VERSION_MAJOR-DATE_STAMP, VERSION_MAJOR.VERSION_MINOR, VERSION_MAJOR.VERSION_MINOR-DATE_STAMP
           tags="latest ${{ matrix.VERSION_MAJOR }} ${{ matrix.VERSION_MAJOR }}-${{ env.DATE_STAMP }}"
           [[ ${{ matrix.VERSION_MAJOR }} != *'kitten'* ]] && tags="${tags} ${{ matrix.VERSION_MAJOR }}${VERSION_MINOR} ${{ matrix.VERSION_MAJOR }}${VERSION_MINOR}-${{ env.DATE_STAMP }}"
           for tag in $tags; do
               [ ${{ matrix.VERSION_MAJOR }} != ${{ env.LATEST_MAJOR }} -a "${tag}" = "latest" ] && continue
-              docker manifest create ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${tag} \
-                  ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ matrix.VERSION_MAJOR }}${VERSION_MINOR}-${{ env.DATE_STAMP }}-amd64 \
-                  ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ matrix.VERSION_MAJOR }}${VERSION_MINOR}-${{ env.DATE_STAMP }}-arm64
+
+              docker manifest create ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${tag} ${manifest_contents}
 
               docker manifest inspect ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${tag}
 
               docker manifest push ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${tag}
           done
-
-  build-iso:
-    if: ${{ always() && contains(join(needs.*.result, ','), 'success') }}
-    name: Build ISO
-    needs: [set-versions-matrix, build]
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix: ${{fromJson(needs.set-versions-matrix.outputs.matrix)}}
-    env:
-      DATE_STAMP: ${{ needs.set-versions-matrix.outputs.date_stamp }}
-      IMAGE_NAME: almalinux-${{ matrix.VARIANT }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
-
-      - name: Build ISO
-        id: build
-        uses: ublue-os/titanoboa@anaconda-webui-format
-        with:
-          image-ref: ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ matrix.VERSION_MAJOR }}-${{ env.DATE_STAMP }}-${{ matrix.PLATFORM }}
-          hook-post-rootfs: ${{ github.workspace }}/iso_files/configure_iso.sh
-
-      - name: Rename ISO
-        id: rename
-        env:
-          OUTPUT_PATH: ${{ steps.build.outputs.iso-dest }}
-        run: |
-          set -x
-          mkdir -p output
-          OUTPUT_DIRECTORY="$(realpath output)"
-          ISO_NAME="${{ env.IMAGE_NAME }}-${{ env.DATE_STAMP }}-${{ matrix.PLATFORM }}.iso"
-          sha256sum "${OUTPUT_PATH}" | tee "${OUTPUT_DIRECTORY}/${ISO_NAME}-CHECKSUM"
-          mv "${OUTPUT_PATH}" "${OUTPUT_DIRECTORY}/${ISO_NAME}"
-          echo "output_directory=$OUTPUT_DIRECTORY" >> "${GITHUB_OUTPUT}"
-
-      - name: Upload to Job Artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: ${{ env.IMAGE_NAME }}-${{ env.DATE_STAMP }}-${{ matrix.platform }}-iso
-          if-no-files-found: error
-          path: ${{ steps.rename.outputs.output_directory }}

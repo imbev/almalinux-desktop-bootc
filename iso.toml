@@ -2,7 +2,7 @@
 # When things are signed, add --erroronfail to %post
 contents = """
 %post --log=/root/anaconda-post.log
-bootc switch --mutate-in-place --transport registry --enforce-container-sigpolicy ${IMAGE_NAME}:${IMAGE_TAG}
+bootc switch --mutate-in-place --transport registry --enforce-container-sigpolicy ${IMAGE_REF}
 
 %end
 """
