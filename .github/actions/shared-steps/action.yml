@@ -36,38 +36,42 @@ runs:
         # echo "Exit code: '$res'"
         echo "res=-1" >> "$GITHUB_ENV"
 
-    - name: Build image
-      if: ${{ env.res != 0 }}
-      shell: bash
-      run: |
-        make bootc-image \
-          MAJOR=${{ inputs.VERSION_MAJOR }} \
-          VARIANT=${{ inputs.VARIANT }} \
-          ARCH=${{ env.PLATFORM }} \
-          IMAGE_NAME=${{ inputs.IMAGE_NAME }}
-
-    - name: Run Image
-      if: ${{ env.res != 0 }}
-      shell: bash
-      run: |
-        # Let's see if we have something that makes sense
-        podman run --rm -ti ${{ inputs.IMAGE_NAME }} bootc --version
-
-        # Let the image tell you what it is
-        VERSION_ID=$(podman run --rm -ti ${{ inputs.IMAGE_NAME }} grep "^VERSION_ID=" /etc/os-release | cut -d'=' -f2 | tr -d '"')
-        echo "VERSION_ID=${VERSION_ID}" >> "$GITHUB_ENV"
-
     - name: Log in to registry
       if: ${{ env.res != 0 }}
       shell: bash
       run: podman login ${{ inputs.IMAGE_REGISTRY }} -u ${{ inputs.REGISTRY_USER }} -p ${{ inputs.REGISTRY_PASSWORD }}
 
+    - name: Build bootc container
+      if: ${{ env.res != 0 }}
+      shell: bash
+      run: |
+        make bootc \
+          MAJOR=${{ inputs.VERSION_MAJOR }} \
+          VARIANT=${{ inputs.VARIANT }} \
+          ARCH=${{ env.PLATFORM }} \
+          IMAGE_NAME=${{ inputs.IMAGE_NAME }}
+
+    - name: Run container
+      if: ${{ env.res != 0 }}
+      shell: bash
+      run: |
+        # Let's see if we have something that makes sense
+        sudo podman run --rm localhost/${{ inputs.IMAGE_NAME }} bootc --version
+
+        # Let the image tell you what it is
+        VERSION_ID=$(sudo podman run --rm localhost/${{ inputs.IMAGE_NAME }} grep "^VERSION_ID=" /etc/os-release | cut -d'=' -f2 | tr -d '"')
+        echo "VERSION_ID=${VERSION_ID}"
+        echo "VERSION_ID=${VERSION_ID}" >> "$GITHUB_ENV"
+
     - name: Push to registry
       if: ${{ env.res != 0 }}
       shell: bash
       run: |
+        platform="${{ env.PLATFORM }}"
+        ARCH=${platform#linux/}
+
         # Tag: VERSION_MAJOR.VERSION_MINOR-DATE_STAMP-ARCH
-        podman push ${{ inputs.IMAGE_NAME }} --digestfile=/tmp/digestfile \
+        sudo podman push localhost/${{ inputs.IMAGE_NAME }} --digestfile=/tmp/digestfile \
           docker://${{ inputs.IMAGE_DEST }}/${{ inputs.IMAGE_NAME }}:${{ env.VERSION_ID }}-${{ inputs.DATE_STAMP }}-${{ env.ARCH }}
 
         DIGEST=$(cat /tmp/digestfile)
