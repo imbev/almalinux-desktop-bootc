@@ -3,6 +3,7 @@
 set -euo pipefail
 
 dnf install -y \
+    -x plasma-discover-packagekit \
     @"KDE Plasma Workspaces" \
     falkon
 
