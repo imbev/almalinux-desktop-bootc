@@ -2,6 +2,10 @@
 
 set -euo pipefail
 
-sed -i \
-    's,ExecStart=/usr/bin/bootc update --apply --quiet,ExecStart=/usr/bin/bootc update --quiet,g' \
-    /usr/lib/systemd/system/bootc-fetch-apply-updates.service
+# Disable the automatic reboot on the update service for bootc
+mkdir -p /etc/systemd/system/bootc-fetch-apply-updates.service.d
+cat << EOF > /etc/systemd/system/bootc-fetch-apply-updates.service.d/10-no-apply.conf
+[Service]
+ExecStart=
+ExecStart=/usr/bin/bootc update --quiet
+EOF
