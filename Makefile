@@ -89,7 +89,7 @@ image-iso:
 image-qcow2:
 	make image IMAGE_TYPE=qcow2
 
-run-qemu-qcow: image-qcow2
+run-qemu-qcow:
 	qemu-system-x86_64 \
 		-M accel=kvm \
 		-cpu host \
@@ -99,7 +99,7 @@ run-qemu-qcow: image-qcow2
 		-serial stdio \
 		-snapshot $(QEMU_DISK_QCOW2)
 
-run-qemu-iso: image-iso
+run-qemu-iso:
 	# Make a disk to install to
 	[[ ! -e $(QEMU_DISK_RAW) ]] && dd if=/dev/null of=$(QEMU_DISK_RAW) bs=1M seek=10240
 

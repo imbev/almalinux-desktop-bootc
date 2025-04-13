@@ -42,6 +42,7 @@ env:
   VERSIONS_LIST: '"10-kitten"' # TODO: Add 10 when it is released
   VARIANT_LIST: '"gnome", "plasma"'
   PLATFORM_LIST: '"amd64"' # TODO: ignore ARM for now, "arm64"'
+  # PLATFORM_LIST: '"amd64", "arm64"'
   IMAGE_DEST: 'ghcr.io/${{ github.repository_owner }}'
 
 jobs:
@@ -113,6 +114,50 @@ jobs:
         IMAGE_DEST: ${{ env.IMAGE_DEST }}
         REGISTRY_USER:  ${{ github.actor }} # ${{ secrets.REGISTRY_USER }}
         REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }} # ${{ secrets.REGISTRY_PASSWORD }}
+
+    - name: Setup Syft
+      id: setup-syft
+      if: github.event_name != 'pull_request'
+      uses: anchore/sbom-action/download-syft@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0 # v0
+
+    - name: Generate SBOM
+      id: generate-sbom
+      if: github.event_name != 'pull_request'
+      env:
+        IMAGE: ${{ steps.build_and_push.outputs.IMAGE }}
+        DEFAULT_TAG: ${{ steps.build_and_push.outputs.TAG }}
+        SYFT_CMD: ${{ steps.setup-syft.outputs.cmd }}
+      run: |
+        sudo systemctl start podman.socket
+
+        OUTPUT_PATH="$(mktemp -d)/sbom.json"
+        export SYFT_PARALLELISM=$(($(nproc)*2))
+        sudo $SYFT_CMD ${IMAGE}:${DEFAULT_TAG} -o spdx-json=${OUTPUT_PATH}
+        echo "OUTPUT_PATH=${OUTPUT_PATH}" >> $GITHUB_OUTPUT
+
+    - name: Run Rechunker
+      if: github.event_name != 'pull_request'
+      id: rechunk
+      uses: hhd-dev/rechunk@c945e9ec8ad4466f888e41ab7f4d5ba2f74a8ee4 # v1.2.1
+      with:
+        rechunk: "ghcr.io/hhd-dev/rechunk:v1.2.1"
+        ref: "localhost/${{ env.IMAGE_NAME }}:${{ steps.build_and_push.outputs.TAG }}"
+        prev-ref: "${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ steps.build_and_push.outputs.TAG }}"
+        skip_compression: true
+        version: ${{ matrix.VERSION_MAJOR }}
+
+    - name: Load Image
+      if: github.event_name != 'pull_request'
+      id: load
+      run: |
+        IMAGE=$(sudo podman pull ${{ steps.rechunk.outputs.ref }})
+        sudo rm -rf ${{ steps.rechunk.outputs.location }}
+        sudo podman image tag $IMAGE ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ steps.build_and_push.outputs.TAG }}
+
+        IMAGE=${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ steps.build_and_push.outputs.TAG }}
+        IMAGE_DIGEST=$(sudo podman image inspect --format '{{.Digest}}' $IMAGE)
+        echo "image=$IMAGE" >> $GITHUB_OUTPUT
+        echo "digest=$IMAGE_DIGEST" >> $GITHUB_OUTPUT
 
     - name: Build ISO
       id: build
