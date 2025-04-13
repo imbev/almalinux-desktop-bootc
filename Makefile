@@ -6,9 +6,14 @@ VARIANT = gnome
 ARCH = x86_64
 IMAGE_NAME ?= localhost/almalinux-$(VARIANT)
 IMAGE_TAG ?= latest
+SOURCE_IMAGE_REF ?= $(IMAGE_NAME):$(IMAGE_TAG)
 IMAGE_TYPE ?= iso
 IMAGE_CONFIG ?= iso.toml
-IMAGE_REF ?= localhost/almalinux-$(VARIANT):$(IMAGE_TAG)
+UPDATE_IMAGE_REF ?= localhost/almalinux-$(VARIANT):$(IMAGE_TAG)
+
+QEMU_DISK_RAW ?= ./output/disk.raw
+QEMU_DISK_QCOW2 ?= ./output/qcow2/disk.qcow2
+QEMU_ISO ?= ./output/bootiso/install.iso
 
 .PHONY: \
 	bootc \
@@ -51,10 +56,10 @@ image:
 	#rm -rf ./output
 	mkdir -p ./output
 
-	IMAGE_REF=$(IMAGE_REF) envsubst < $(IMAGE_CONFIG) > ./output/config.toml
+	UPDATE_IMAGE_REF=$(UPDATE_IMAGE_REF) envsubst < $(IMAGE_CONFIG) > ./output/config.toml
 
-	# AlmaLinux's repos are configured with mirrorlist and apparently that stops you from building ISOs with librepo=true
-	# https://github.com/osbuild/bootc-image-builder/issues/883
+	@# AlmaLinux's repos are configured with mirrorlist and apparently that stops you from building ISOs with librepo=true
+	@# https://github.com/osbuild/bootc-image-builder/issues/883
 	@sh -c '\
 		if [ "$(IMAGE_TYPE)" = "iso" ]; then \
 			LIBREPO=False; \
@@ -73,7 +78,7 @@ image:
 			quay.io/centos-bootc/bootc-image-builder:latest \
 			--type $(IMAGE_TYPE) \
 			--use-librepo=$$LIBREPO \
-			$(IMAGE_NAME):$(IMAGE_TAG) \
+			$(SOURCE_IMAGE_REF) \
 	'
 
 	$(SUDO) chown -R $(USER):$(USER) ./output
@@ -92,11 +97,11 @@ run-qemu-qcow: image-qcow2
 		-m 4096 \
 		-bios /usr/share/OVMF/x64/OVMF.4m.fd \
 		-serial stdio \
-		-snapshot ./output/qcow2/disk.qcow2
+		-snapshot $(QEMU_DISK_QCOW2)
 
 run-qemu-iso: image-iso
 	# Make a disk to install to
-	[[ ! -e ./output/disk.raw ]] && dd if=/dev/null of=./output/disk.raw bs=1M seek=10240
+	[[ ! -e $(QEMU_DISK_RAW) ]] && dd if=/dev/null of=$(QEMU_DISK_RAW) bs=1M seek=10240
 
 	qemu-system-x86_64 \
 		-M accel=kvm \
@@ -106,8 +111,8 @@ run-qemu-iso: image-iso
 		-bios /usr/share/OVMF/x64/OVMF.4m.fd \
 		-serial stdio \
 		-boot d \
-		-cdrom ./output/bootiso/install.iso \
-		-hda ./output/disk.raw
+		-cdrom $(QEMU_ISO) \
+		-hda $(QEMU_DISK_RAW)
 
 clean:
 	-$(PODMAN) rmi $(IMAGE_NAME)

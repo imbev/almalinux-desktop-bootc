@@ -1,4 +1,4 @@
-name: "Build and Push"
+name: "Build and Push Container"
 
 inputs:
   IMAGE_NAME:
@@ -7,7 +7,7 @@ inputs:
     required: true
   VARIANT:
     required: true
-  DATE_STAMP:
+  UID:
     required: true
   IMAGE_REGISTRY:
     required: true
@@ -17,6 +17,21 @@ inputs:
     required: true
   REGISTRY_PASSWORD:
     required: true
+
+outputs:
+  IMAGE:
+    description: "Image name"
+    value: ${{ steps.push.outputs.IMAGE }}
+  TAG:
+    description: "Image tag"
+    value: ${{ steps.push.outputs.TAG }}
+  DIGEST:
+    description: "Image digest"
+    value: ${{ steps.push.outputs.DIGEST }}
+  VERSION_ID:
+    description: "OS Version ID"
+    value: ${{ steps.run_container.outputs.VERSION_ID }}
+
 runs:
   using: "composite"
   steps:
@@ -52,6 +67,7 @@ runs:
           IMAGE_NAME=${{ inputs.IMAGE_NAME }}
 
     - name: Run container
+      id: run_container
       if: ${{ env.res != 0 }}
       shell: bash
       run: |
@@ -61,19 +77,21 @@ runs:
         # Let the image tell you what it is
         VERSION_ID=$(sudo podman run --rm localhost/${{ inputs.IMAGE_NAME }} grep "^VERSION_ID=" /etc/os-release | cut -d'=' -f2 | tr -d '"')
         echo "VERSION_ID=${VERSION_ID}"
-        echo "VERSION_ID=${VERSION_ID}" >> "$GITHUB_ENV"
+        echo "VERSION_ID=${VERSION_ID}" >> "$GITHUB_OUTPUT"
 
     - name: Push to registry
+      id: push
       if: ${{ env.res != 0 }}
       shell: bash
       run: |
         platform="${{ env.PLATFORM }}"
         ARCH=${platform#linux/}
 
-        # Tag: VERSION_MAJOR.VERSION_MINOR-DATE_STAMP-ARCH
+        TAG="${{ inputs.VERSION_MAJOR }}-${{ inputs.VARIANT }}-${ARCH}-${{ inputs.UID }}"
         sudo podman push localhost/${{ inputs.IMAGE_NAME }} --digestfile=/tmp/digestfile \
-          docker://${{ inputs.IMAGE_DEST }}/${{ inputs.IMAGE_NAME }}:${{ env.VERSION_ID }}-${{ inputs.DATE_STAMP }}-${{ env.ARCH }}
+          docker://${{ inputs.IMAGE_DEST }}/${{ inputs.IMAGE_NAME }}:${TAG}
 
         DIGEST=$(cat /tmp/digestfile)
-        echo "DIGEST=$DIGEST" >> $GITHUB_OUTPUT
-        echo "IMAGE=$IMAGE_REGISTRY/$IMAGE_NAME" >> $GITHUB_OUTPUT
+        echo "DIGEST=${DIGEST}" >> $GITHUB_OUTPUT
+        echo "IMAGE=${{ inputs.IMAGE_DEST }}/${{ inputs.IMAGE_NAME }}" >> $GITHUB_OUTPUT
+        echo "TAG=${TAG}" >> $GITHUB_OUTPUT

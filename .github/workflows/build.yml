@@ -1,4 +1,4 @@
-name: Build image
+name: Build images
 on:
   workflow_dispatch:
     inputs:
@@ -34,11 +34,11 @@ on:
   push:
     branches:
       - master
+      - dev2
     paths-ignore:
       - '*.md'
 
 env:
-  LATEST_MAJOR: 10-kitten
   VERSIONS_LIST: '"10-kitten"' # TODO: Add 10 when it is released
   VARIANT_LIST: '"gnome", "plasma"'
   PLATFORM_LIST: '"amd64"' # TODO: ignore ARM for now, "arm64"'
@@ -51,6 +51,7 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
       date_stamp: ${{ steps.date-stamp.outputs.date_stamp }}
+      uid: ${{ steps.set-uid.outputs.UID }}
     steps:
       - name: Set matrix
         id: set-matrix
@@ -77,6 +78,10 @@ jobs:
           date_stamp=$(date -u '+%Y%m%d')
           [ "x${date_stamp}" != "x" ] && echo "date_stamp=${date_stamp}" >> "$GITHUB_OUTPUT"
 
+      - name: Set UID
+        id: set-uid
+        run: echo "UID="${{ github.run_id }}.${{ github.run_number }}.${{ github.run_attempt }}"" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build image
     runs-on: ${{ matrix.PLATFORM == 'amd64' && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
@@ -88,6 +93,8 @@ jobs:
     env:
       PLATFORM: "linux/${{ matrix.PLATFORM }}"
       DATE_STAMP: ${{ needs.set-versions-matrix.outputs.date_stamp }}
+      UID: ${{ needs.set-versions-matrix.outputs.uid }}
+      IMAGE_NAME: "almalinux-${{ matrix.VARIANT }}"
 
     steps:
     - uses: actions/checkout@v4
@@ -95,13 +102,13 @@ jobs:
         submodules: true
 
     - uses: ./.github/actions/shared-steps
-      name: Build and Push
+      name: Build and Push Container
       id: build_and_push
       with:
-        IMAGE_NAME: almalinux-${{ matrix.VARIANT }}
+        IMAGE_NAME: ${{ env.IMAGE_NAME }}
         VERSION_MAJOR: ${{ matrix.VERSION_MAJOR }}
         VARIANT: ${{ matrix.VARIANT }}
-        DATE_STAMP: ${{ env.DATE_STAMP }}
+        UID: ${{ env.UID }}
         IMAGE_REGISTRY: ghcr.io # ${{ secrets.IMAGE_REGISTRY }}
         IMAGE_DEST: ${{ env.IMAGE_DEST }}
         REGISTRY_USER:  ${{ github.actor }} # ${{ secrets.REGISTRY_USER }}
@@ -110,13 +117,15 @@ jobs:
     - name: Build ISO
       id: build
       shell: bash
+      env:
+        SOURCE_IMAGE_REF: "${{ steps.build_and_push.outputs.IMAGE }}@${{ steps.build_and_push.outputs.DIGEST }}"
       run: |
-        sudo podman pull ${{ steps.build_and_push.outputs.IMAGE }}:${{ steps.build_and_push.outputs.DIGEST }}
+        echo "Building ISO for: ${SOURCE_IMAGE_REF}"
 
+        sudo podman pull ${SOURCE_IMAGE_REF}
         make image-iso \
-          IMAGE_NAME=${{ steps.build_and_push.outputs.IMAGE }} \
-          IMAGE_TAG=${{ steps.build_and_push.outputs.DIGEST }} \
-          IMAGE_REF=${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ matrix.VERSION_MAJOR }}
+          SOURCE_IMAGE_REF=${SOURCE_IMAGE_REF} \
+          UPDATE_IMAGE_REF=${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ matrix.VERSION_MAJOR }}
 
         echo "iso-dest=${{ github.workspace }}/output/bootiso/install.iso" >> "$GITHUB_OUTPUT"
 
@@ -134,15 +143,24 @@ jobs:
         mv "${OUTPUT_PATH}" "${OUTPUT_DIRECTORY}/${ISO_NAME}"
         echo "output_directory=$OUTPUT_DIRECTORY" >> "${GITHUB_OUTPUT}"
 
-    - name: Upload to Job Artifacts
+    - name: Upload ISO to Job Artifacts
+      id: upload
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ${{ env.IMAGE_NAME }}-${{ env.DATE_STAMP }}-${{ matrix.platform }}-iso
         if-no-files-found: error
         path: ${{ steps.rename.outputs.output_directory }}
 
+    - name: Write summary
+      id: summary
+      shell: bash
+      run: |
+        echo "### Images for ${{ matrix.VERSION_MAJOR }} ${{ matrix.VARIANT }} ${{ matrix.PLATFORM }}" >> $GITHUB_STEP_SUMMARY
+        echo "- Container: \`${{ steps.build_and_push.outputs.IMAGE }}@${{ steps.build_and_push.outputs.DIGEST }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- ISO: ${{ steps.upload.outputs.artifact-url }} (${{ steps.upload.outputs.artifact-digest }})" >> $GITHUB_STEP_SUMMARY
+
   push-manifest:
-    if: ${{ always() && contains(join(needs.*.result, ','), 'success') }}
+    if: ${{ '!cancelled()' && contains(join(needs.*.result, ','), 'success') }}
     name: Push manifest
     needs: [set-versions-matrix, build]
     runs-on: ubuntu-24.04
@@ -153,26 +171,22 @@ jobs:
         VARIANT: ${{fromJson(needs.set-versions-matrix.outputs.matrix).VARIANT}}
     env:
       DATE_STAMP: ${{ needs.set-versions-matrix.outputs.date_stamp }}
+      UID: ${{ needs.set-versions-matrix.outputs.uid }}
       IMAGE_NAME: almalinux-${{ matrix.VARIANT }}
 
     steps:
-      - name: Set environment
-        run: |
-          # Minor version for both amd64 and arm64
-          for MACHINE in x86_64 aarch64; do
-            VERSION_MINOR=
-            release=${{ matrix.VERSION_MAJOR }}
-            if [[ "${{ matrix.VERSION_MAJOR }}" != *'kitten'* ]]; then
-              almalinux_release=https://repo.almalinux.org/almalinux/almalinux-release-latest-${{ matrix.VERSION_MAJOR }}.${MACHINE}.rpm
-              # TODO: remove when AlmaLinux 10.0 is released
-              [ "${{ matrix.VERSION_MAJOR }}" = "10" ] && almalinux_release=https://vault.almalinux.org/almalinux-release-latest-10-beta.${MACHINE}.rpm
-              release=$(rpm -q --qf="%{VERSION}\n" ${almalinux_release} 2>/dev/null)
-              VERSION_MINOR=.$(cut -d '.' -f 2 <<< "$release")
-            fi
-            echo "VERSION_MINOR_${MACHINE}=${VERSION_MINOR}" >> "$GITHUB_ENV"
-            echo "[Debug] MACHINE=${MACHINE} release=$release VERSION_MINOR=${VERSION_MINOR}"
-            unset VERSION_MINOR release
-          done
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Dump steps context
+        env:
+          CONTEXT: ${{ toJson(steps) }}
+        run: echo "$CONTEXT"
+      - name: Dump needs context
+        env:
+          CONTEXT: ${{ toJson(needs) }}
+        run: echo "$CONTEXT"
 
       - name: Login to registry (docker)
         uses: docker/login-action@v3
@@ -181,38 +195,101 @@ jobs:
           username: ${{ github.actor }} # ${{ secrets.REGISTRY_USER }}
           password: ${{ secrets.GITHUB_TOKEN }} # ${{ secrets.REGISTRY_PASSWORD }}
 
-      - name: Create and push manifest (docker)
+      - uses: ./.github/actions/container_info
+        name: Container Info
+        id: info-amd64
+        # if: '!cancelled()'
+        with:
+          IMAGE_REF: "${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ matrix.VERSION_MAJOR }}-${{ matrix.VARIANT }}-amd64-${{ env.UID }}"
+
+      - uses: ./.github/actions/container_info
+        name: Container Info
+        id: info-arm64
+        # if: '!cancelled()'
+        with:
+          IMAGE_REF: "${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ matrix.VERSION_MAJOR }}-${{ matrix.VARIANT }}-arm64-${{ env.UID }}"
+
+      - name: Check version IDs
+        id: check-version-ids
+        # if: '!cancelled()'
         shell: bash
-        run:  |
-          # Manifest for both amd64 and arm64
-          amd64_exists=0
-          arm64_exists=0
-          docker manifest inspect ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ matrix.VERSION_MAJOR }}-${{ env.DATE_STAMP }}-amd64 >/dev/null 2>&1 \
-            || amd64_exists=$?
-          docker manifest inspect ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ matrix.VERSION_MAJOR }}-${{ env.DATE_STAMP }}-arm64 >/dev/null 2>&1 \
-            || arm64_exists=$?
-          [ $amd64_exists -ne 0 -a $arm64_exists -ne 0 ] && exit 1
+        run: |
+          # Check if the version IDs are the same for both architectures
+          amd64_version_id="${{ steps.info-amd64.outputs.VERSION_ID }}"
+          arm64_version_id="${{ steps.info-arm64.outputs.VERSION_ID }}"
 
-          # Don't push manifest if amd64 and arm64 minor versions differ
-          VERSION_MINOR=${{ env.VERSION_MINOR_x86_64 }}
-          [ "${{ env.VERSION_MINOR_x86_64 }}" != "${{ env.VERSION_MINOR_aarch64 }}" ] && exit 2
-
-          if [ $amd64_exists -eq 0 ]; then
-            manifest_contents="${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ matrix.VERSION_MAJOR }}-${{ env.DATE_STAMP }}-amd64 "
-          fi
-          if [ $arm64_exists -eq 0 ]; then
-            manifest_contents="${manifest_contents} ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ matrix.VERSION_MAJOR }}-${{ env.DATE_STAMP }}-arm64"
+          if [[ -n "${amd64_version_id}" && -n "${arm64_version_id}" && "${amd64_version_id}" != "${arm64_version_id}" ]]; then
+            echo "Version IDs do not match: ${arm64_version_id} != ${arm64_version_id}"
+            exit 1
           fi
 
-          # Loop over need tags: latest, VERSION_MAJOR, VERSION_MAJOR-DATE_STAMP, VERSION_MAJOR.VERSION_MINOR, VERSION_MAJOR.VERSION_MINOR-DATE_STAMP
-          tags="latest ${{ matrix.VERSION_MAJOR }} ${{ matrix.VERSION_MAJOR }}-${{ env.DATE_STAMP }}"
-          [[ ${{ matrix.VERSION_MAJOR }} != *'kitten'* ]] && tags="${tags} ${{ matrix.VERSION_MAJOR }}${VERSION_MINOR} ${{ matrix.VERSION_MAJOR }}${VERSION_MINOR}-${{ env.DATE_STAMP }}"
-          for tag in $tags; do
-              [ ${{ matrix.VERSION_MAJOR }} != ${{ env.LATEST_MAJOR }} -a "${tag}" = "latest" ] && continue
+          echo "version_id=${amd64_version_id-${arm64_version_id-${{ matrix.VERSION_MAJOR }}}}" >> "$GITHUB_OUTPUT"
 
-              docker manifest create ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${tag} ${manifest_contents}
+      - name: Create manifest
+        id: manifest
+        shell: bash
+        run: podman manifest create ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}
 
-              docker manifest inspect ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${tag}
+      - name: Add amd64
+        id: add-amd64
+        if: ${{ steps.info-amd64.outputs.DIGEST }}
+        shell: bash
+        run: podman manifest add ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }} ${{ steps.info-amd64.outputs.IMAGE_NAME }}@${{ steps.info-amd64.outputs.DIGEST }}
 
-              docker manifest push ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${tag}
+      - name: Add arm64
+        id: add-arm64
+        if: ${{ steps.info-arm64.outputs.DIGEST }}
+        shell: bash
+        run: podman manifest add ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }} ${{ steps.info-arm64.outputs.IMAGE_NAME }}@${{ steps.info-arm64.outputs.DIGEST }}
+
+      - name: Container metadata
+        id: meta
+        if: ${{ '!cancelled()' && steps.info-amd64.outputs.DIGEST || steps.info-arm64.outputs.DIGEST }}
+        uses: docker/metadata-action@v4
+        with:
+          images: |
+            ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch,prefix=${{ matrix.VERSION_MAJOR }}-
+            type=ref,event=pr,prefix=${{ matrix.VERSION_MAJOR }}-pr-
+            type=sha,prefix=${{ matrix.VERSION_MAJOR }}-sha-
+            type=raw,value=${{ matrix.VERSION_MAJOR }}
+            type=raw,value=${{ matrix.VERSION_MAJOR }}-${{ env.DATE_STAMP }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.check-version-ids.outputs.version_id }},enable=${{ matrix.VERSION_MAJOR != '10-kitten' }}
+            type=raw,value=${{ steps.check-version-ids.outputs.version_id }}-${{ env.DATE_STAMP }},enable=${{ matrix.VERSION_MAJOR != '10-kitten' }}
+          labels: |
+            org.opencontainers.image.vendor=Atomic SIG
+            org.opencontainers.image.title=AlmaLinux ${{ matrix.VERSION_MAJOR }} Atomic ${{ matrix.VARIANT }} edition
+            org.opencontainers.image.description=AlmaLinux ${{ matrix.VERSION_MAJOR }} Atomic ${{ matrix.VARIANT }} edition
+            org.opencontainers.image.version=${{ steps.check-version-ids.outputs.version_id }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ github.event.created_at }}
+
+      - name: Add tags
+        if: ${{ steps.meta.outputs.tags }}
+        shell: bash
+        run: |
+          # fix multi-line issue from steps.meta.outputs.tags
+          podman tag ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }} $(echo "${{ steps.meta.outputs.tags }}" | tr '\n' ' ')
+
+      - name: Push to registry
+        id: push
+        shell: bash
+        run: |
+          podman push ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }} --digestfile=/tmp/digestfile \
+            docker://${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ matrix.VERSION_MAJOR }}
+
+          DIGEST=$(cat /tmp/digestfile)
+          echo "DIGEST=${DIGEST}" >> $GITHUB_OUTPUT
+          echo "IMAGE=${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}" >> $GITHUB_OUTPUT
+          echo "TAGS=$(echo "${{ steps.meta.outputs.tags }}" | xargs)" >> $GITHUB_OUTPUT
+
+      - name: Write summary
+        id: summary
+        shell: bash
+        run: |
+          echo "## Multiarch images for ${{ matrix.VERSION_MAJOR }} ${{ matrix.VARIANT }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Container: \`${{ steps.push.outputs.IMAGE }}@${{ steps.push.outputs.DIGEST }}\`" >> $GITHUB_STEP_SUMMARY
+          for tag in ${{ steps.push.outputs.TAGS }}; do
+            echo "  - \`${{ steps.push.outputs.IMAGE }}:${tag}\`" >> $GITHUB_STEP_SUMMARY
           done
