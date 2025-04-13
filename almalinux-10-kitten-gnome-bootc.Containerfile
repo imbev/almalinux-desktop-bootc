@@ -6,6 +6,8 @@ RUN /scripts/epel-repo.sh
 
 RUN /scripts/gnome-desktop.sh
 
+RUN /scripts/appimage-compat.sh
+
 RUN /scripts/console-login-helper-messages-remove.sh
 
 RUN /scripts/dnf-clean.sh

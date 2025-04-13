@@ -6,6 +6,8 @@ RUN /scripts/epel-repo.sh
 
 RUN /scripts/plasma-desktop.sh
 
+RUN /scripts/appimage-compat.sh
+
 RUN /scripts/plymouth-theme.sh
 
 RUN /scripts/console-login-helper-messages-remove.sh
