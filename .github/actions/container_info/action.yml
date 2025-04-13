@@ -1,0 +1,37 @@
+name: "Container Info"
+
+inputs:
+  IMAGE_REF:
+    description: "Container Image reference"
+    required: true
+
+outputs:
+  IMAGE_NAME:
+    description: "Image name"
+    value: ${{ steps.image_info.outputs.IMAGE_NAME }}
+  DIGEST:
+    description: "Image digest"
+    value: ${{ steps.image_info.outputs.DIGEST }}
+  VERSION_ID:
+    description: "OS Version ID"
+    value: ${{ steps.image_info.outputs.VERSION_ID }}
+  SUCCESS:
+    description: "If the image exists or not"
+    value: ${{ steps.image_info.outcome }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Get image info
+      shell: bash
+      id: image_info
+      continue-on-error: true
+      run: |
+        INFO=$(skopeo inspect docker://${{ inputs.IMAGE_REF }})
+        res=$?
+
+        echo "IMAGE_NAME=$(echo "$INFO" | jq -r '.Name')" >> "$GITHUB_OUTPUT"
+        echo "DIGEST=$(echo "$INFO" | jq -r '.Digest')" >> "$GITHUB_OUTPUT"
+        echo "VERSION_ID=$(echo "$INFO" | jq -r '.Labels["redhat.version-id"]')" >> "$GITHUB_OUTPUT"
+        echo "SUCCESS=${res}" >> "$GITHUB_OUTPUT"
+        # exit $res

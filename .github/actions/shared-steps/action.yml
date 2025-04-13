@@ -1,0 +1,179 @@
+name: "Build and Push Container"
+
+inputs:
+  IMAGE_NAME:
+    required: true
+  VERSION_MAJOR:
+    required: true
+  VARIANT:
+    required: true
+  UID:
+    required: true
+  IMAGE_REGISTRY:
+    required: true
+  IMAGE_DEST:
+    required: true
+  REGISTRY_USER:
+    required: true
+  REGISTRY_PASSWORD:
+    required: true
+  COSIGN_PRIVATE_KEY:
+    required: true
+
+outputs:
+  IMAGE:
+    description: "Image name"
+    value: ${{ steps.push.outputs.IMAGE }}
+  TAG:
+    description: "Image tag"
+    value: ${{ steps.push.outputs.TAG }}
+  DIGEST:
+    description: "Image digest"
+    value: ${{ steps.push.outputs.DIGEST }}
+  VERSION_ID:
+    description: "OS Version ID"
+    value: ${{ steps.run_container.outputs.VERSION_ID }}
+
+runs:
+  using: "composite"
+  steps:
+    # Need to rewrite this to figure out if the image of that date is already built instead
+    - name: Check update
+      shell: bash
+      run: |
+        # 'dnf check-update'
+        # exit codes:
+        #   0 - no updates
+        #   100 - updates available
+        #   125 - tag/platform not found
+        #   127 - command not found
+        # res=0
+        # podman run --quiet --rm ${{ inputs.IMAGE_REGISTRY }}/${{ inputs.IMAGE_NAME }}:${{ inputs.VERSION_MAJOR }} dnf check-update || res=$?
+        # echo "res=${res}" >> "$GITHUB_ENV"
+        # echo "Exit code: '$res'"
+        echo "res=-1" >> "$GITHUB_ENV"
+
+    - name: Log in to registry
+      if: ${{ env.res != 0 }}
+      shell: bash
+      run: podman login ${{ inputs.IMAGE_REGISTRY }} -u ${{ inputs.REGISTRY_USER }} -p ${{ inputs.REGISTRY_PASSWORD }}
+
+    - name: Build bootc container
+      if: ${{ env.res != 0 }}
+      shell: bash
+      run: |
+        make bootc \
+          MAJOR=${{ inputs.VERSION_MAJOR }} \
+          VARIANT=${{ inputs.VARIANT }} \
+          ARCH=${{ env.PLATFORM }} \
+          IMAGE_NAME=${{ inputs.IMAGE_NAME }}
+
+    - name: Setup Syft
+      id: setup-syft
+      if: github.event_name != 'pull_request'
+      uses: anchore/sbom-action/download-syft@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0 # v0
+
+    - name: Generate SBOM
+      id: generate-sbom
+      if: github.event_name != 'pull_request'
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.IMAGE_NAME }}
+        DEFAULT_TAG: latest
+        SYFT_CMD: ${{ steps.setup-syft.outputs.cmd }}
+      run: |
+        sudo systemctl start podman.socket
+
+        OUTPUT_PATH="$(mktemp -d)/sbom.json"
+        export SYFT_PARALLELISM=$(($(nproc)*2))
+        sudo $SYFT_CMD ${IMAGE}:${DEFAULT_TAG} -o spdx-json=${OUTPUT_PATH}
+        echo "OUTPUT_PATH=${OUTPUT_PATH}" >> $GITHUB_OUTPUT
+
+    - name: Run Rechunker
+      if: github.event_name != 'pull_request'
+      id: rechunk
+      uses: hhd-dev/rechunk@c945e9ec8ad4466f888e41ab7f4d5ba2f74a8ee4 # v1.2.1
+      with:
+        rechunk: "ghcr.io/hhd-dev/rechunk:v1.2.1"
+        ref: "localhost/${{ inputs.IMAGE_NAME }}"
+        prev-ref: "localhost//${{ inputs.IMAGE_NAME }}"
+        skip_compression: true
+        version: ${{ inputs.VERSION_MAJOR }}
+
+    - name: Load Image
+      if: github.event_name != 'pull_request'
+      id: load
+      shell: bash
+      run: |
+        IMAGE=$(sudo podman pull ${{ steps.rechunk.outputs.ref }})
+        sudo rm -rf ${{ steps.rechunk.outputs.location }}
+        sudo podman image tag $IMAGE localhost/${{ inputs.IMAGE_NAME }}
+
+        IMAGE=localhost/${{ inputs.IMAGE_NAME }}
+        IMAGE_DIGEST=$(sudo podman image inspect --format '{{.Digest}}' $IMAGE)
+        echo "image=$IMAGE" >> $GITHUB_OUTPUT
+        echo "digest=$IMAGE_DIGEST" >> $GITHUB_OUTPUT
+
+    - name: Run container
+      id: run_container
+      if: ${{ env.res != 0 }}
+      shell: bash
+      run: |
+        # Let's see if we have something that makes sense
+        sudo podman run --rm localhost/${{ inputs.IMAGE_NAME }} bootc --version
+
+        # Let the image tell you what it is
+        VERSION_ID=$(sudo podman run --rm localhost/${{ inputs.IMAGE_NAME }} grep "^VERSION_ID=" /etc/os-release | cut -d'=' -f2 | tr -d '"')
+        echo "VERSION_ID=${VERSION_ID}"
+        echo "VERSION_ID=${VERSION_ID}" >> "$GITHUB_OUTPUT"
+
+    - name: Push to registry
+      id: push
+      if: ${{ env.res != 0 }}
+      shell: bash
+      run: |
+        platform="${{ env.PLATFORM }}"
+        ARCH=${platform#linux/}
+
+        TAG="${{ inputs.VERSION_MAJOR }}-${{ inputs.VARIANT }}-${ARCH}-${{ inputs.UID }}"
+        sudo podman push localhost/${{ inputs.IMAGE_NAME }} --digestfile=/tmp/digestfile \
+          docker://${{ inputs.IMAGE_DEST }}/${{ inputs.IMAGE_NAME }}:${TAG}
+
+        DIGEST=$(cat /tmp/digestfile)
+        echo "DIGEST=${DIGEST}" >> $GITHUB_OUTPUT
+        echo "IMAGE=${{ inputs.IMAGE_DEST }}/${{ inputs.IMAGE_NAME }}" >> $GITHUB_OUTPUT
+        echo "TAG=${TAG}" >> $GITHUB_OUTPUT
+
+    - name: Install Cosign
+      uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a # v3.8.1
+      if: github.event_name != 'pull_request'
+
+    - name: Log in to registry, again
+      if: ${{ env.res != 0 }}
+      shell: bash
+      run: docker login ${{ inputs.IMAGE_REGISTRY }} -u ${{ inputs.REGISTRY_USER }} -p ${{ inputs.REGISTRY_PASSWORD }}
+
+    - name: Sign Image
+      if: github.event_name != 'pull_request'
+      shell: bash
+      env:
+        COSIGN_EXPERIMENTAL: false
+        COSIGN_PRIVATE_KEY: ${{ inputs.COSIGN_PRIVATE_KEY }}
+      run: |
+        cosign sign -y --key env://COSIGN_PRIVATE_KEY ${{ steps.push.outputs.IMAGE }}@${{ steps.push.outputs.DIGEST }}
+
+    - name: Add SBOM Attestation
+      if: github.event_name != 'pull_request'
+      shell: bash
+      env:
+        IMAGE: ${{ steps.push.outputs.IMAGE }}
+        DIGEST: ${{ steps.push.outputs.DIGEST }}
+        COSIGN_PRIVATE_KEY: ${{ inputs.COSIGN_PRIVATE_KEY }}
+        SBOM_OUTPUT: ${{ steps.generate-sbom.outputs.OUTPUT_PATH }}
+      run: |
+        cd "$(dirname "$SBOM_OUTPUT")"
+        cosign attest -y \
+          --predicate ./sbom.json \
+          --type spdxjson \
+          --key env://COSIGN_PRIVATE_KEY \
+          "${IMAGE}@${DIGEST}"
