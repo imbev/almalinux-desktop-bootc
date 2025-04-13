@@ -34,7 +34,6 @@ on:
   push:
     branches:
       - master
-      - dev2
     paths-ignore:
       - '*.md'
 
