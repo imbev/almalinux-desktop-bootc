@@ -18,6 +18,6 @@ RUN /scripts/flathub-repo.sh
 
 RUN /scripts/bootc-update-noapply.sh
 
-RUN /scripts/clean.sh
-
 RUN /scripts/lint.sh
+
+RUN /scripts/clean.sh
