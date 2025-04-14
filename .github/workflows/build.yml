@@ -34,7 +34,6 @@ on:
   push:
     branches:
       - master
-      - automation
     paths-ignore:
       - '*.md'
 
