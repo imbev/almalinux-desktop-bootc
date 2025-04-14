@@ -2,4 +2,6 @@
 
 set -euo pipefail
 
+rm -rf /scripts
+
 dnf clean all
