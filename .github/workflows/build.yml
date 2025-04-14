@@ -113,7 +113,7 @@ jobs:
         IMAGE_DEST: ${{ env.IMAGE_DEST }}
         REGISTRY_USER:  ${{ github.actor }} # ${{ secrets.REGISTRY_USER }}
         REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }} # ${{ secrets.REGISTRY_PASSWORD }}
-        COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
+        # COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
 
     - name: Build ISO
       id: build
