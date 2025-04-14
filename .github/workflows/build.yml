@@ -275,18 +275,18 @@ jobs:
           # fix multi-line issue from steps.meta.outputs.tags
           podman tag ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }} $(echo "${{ steps.meta.outputs.tags }}" | tr '\n' ' ')
 
-      - name: Add annotations
-        shell: bash
-        env:
-          MANIFEST: ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}
-          LABELS: ${{ steps.meta.outputs.labels }}
-        run: |
-          # Apply the labels to the manifest (separated by newlines)
-          while IFS= read -r label; do
-            echo "Applying label $label to manifest"
-            # (Use this once Podman 5 is available on GHA) podman manifest annotate --index --annotation "$label" $MANIFEST
-            podman manifest annotate --annotation "$label" $MANIFEST
-          done <<< "$LABELS"
+      # - name: Add annotations
+      #   shell: bash
+      #   env:
+      #     MANIFEST: ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}
+      #     LABELS: ${{ steps.meta.outputs.labels }}
+      #   run: |
+      #     # Apply the labels to the manifest (separated by newlines)
+      #     while IFS= read -r label; do
+      #       echo "Applying label $label to manifest"
+      #       # (Use this once Podman 5 is available on GHA) podman manifest annotate --index --annotation "$label" $MANIFEST
+      #       podman manifest annotate --annotation "$label" $MANIFEST
+      #     done <<< "$LABELS"
 
       - name: Push to registry
         id: push
