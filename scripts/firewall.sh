@@ -2,9 +2,6 @@
 
 set -euo pipefail
 
-dnf install -y \
-	firewall-config
-
 cat << EOF > /usr/lib/firewalld/zones/Workstation.xml
 <?xml version="1.0" encoding="utf-8"?>
 <zone>
