@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+cat << EOF > /usr/lib/firewalld/zones/Workstation.xml
+<?xml version="1.0" encoding="utf-8"?>
+<zone>
+  <short>Workstation</short>
+  <description>Unsolicited incoming network packets are rejected from port 1 to 1024, except for select network services. Incoming packets that are related to outgoing network connections are accepted. Outgoing network connections are allowed.</description>
+  <service name="dhcpv6-client"/>
+  <service name="ssh"/>
+  <service name="samba-client"/>
+  <port protocol="udp" port="1025-65535"/>
+  <port protocol="tcp" port="1025-65535"/>
+  <forward/>
+</zone>
+EOF
