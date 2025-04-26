@@ -26,6 +26,11 @@ on:
         options:
           - amd64
           - arm64
+      FORCE_REBUILD:
+        description: "Force rebuild even if no changes were made"
+        required: false
+        default: false
+        type: boolean
 
   schedule:
     # run every day at 05:00 UTC (AlmaLinux bootc images are built at 03:00 UTC)
@@ -97,13 +102,22 @@ jobs:
       IMAGE_NAME: "almalinux-${{ matrix.VARIANT }}"
 
     steps:
+    - name: Check updates
+      id: check_update
+      if: ${{ ! inputs.FORCE_REBUILD }}
+      uses: alexiri/update-image-action@main
+      with:
+        imageref: ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ matrix.VERSION_MAJOR }}
+
     - uses: actions/checkout@v4
+      if: ${{ steps.check_update.outputs.rebuild-needed == 'true' || inputs.FORCE_REBUILD }}
       with:
         submodules: true
 
     - uses: ./.github/actions/shared-steps
       name: Build and Push Container
       id: build_and_push
+      if: ${{ steps.check_update.outputs.rebuild-needed == 'true' || inputs.FORCE_REBUILD }}
       with:
         IMAGE_NAME: ${{ env.IMAGE_NAME }}
         VERSION_MAJOR: ${{ matrix.VERSION_MAJOR }}
@@ -117,6 +131,7 @@ jobs:
 
     - name: Build ISO
       id: build
+      if: ${{ steps.check_update.outputs.rebuild-needed == 'true' || inputs.FORCE_REBUILD }}
       shell: bash
       env:
         SOURCE_IMAGE_REF: "${{ steps.build_and_push.outputs.IMAGE }}@${{ steps.build_and_push.outputs.DIGEST }}"
@@ -132,6 +147,7 @@ jobs:
 
     - name: Rename ISO
       id: rename
+      if: ${{ steps.build.outputs.iso-dest }}
       shell: bash
       env:
         OUTPUT_PATH: ${{ steps.build.outputs.iso-dest }}
@@ -146,6 +162,7 @@ jobs:
 
     - name: Upload ISO to Job Artifacts
       id: upload
+      if: ${{ steps.rename.outputs.output_directory }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ${{ env.IMAGE_NAME }}-${{ env.DATE_STAMP }}-${{ matrix.platform }}-iso
@@ -154,6 +171,7 @@ jobs:
 
     - name: Write summary
       id: summary
+      if: ${{ steps.check_update.outputs.rebuild-needed == 'true' || inputs.FORCE_REBUILD }}
       shell: bash
       run: |
         echo "### Images for ${{ matrix.VERSION_MAJOR }} ${{ matrix.VARIANT }} ${{ matrix.PLATFORM }}" >> $GITHUB_STEP_SUMMARY
@@ -266,6 +284,7 @@ jobs:
             org.opencontainers.image.created=${{ github.event.created_at }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}/blob/${{ github.sha }}/${{ matrix.VERSION_MAJOR }}/${{ matrix.VARIANT }}/Containerfile
             org.opencontainers.image.url=https://github.com/${{ github.repository }}
+            org.opencontainers.image.base.name=quay.io/almalinuxorg/almalinux-bootc:${{ matrix.VERSION_MAJOR }}
 
       - name: Add tags
         if: ${{ steps.meta.outputs.tags }}
