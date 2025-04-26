@@ -105,7 +105,7 @@ jobs:
     - name: Check updates
       id: check_update
       if: ${{ ! inputs.FORCE_REBUILD }}
-      uses: alexiri/update-image-action@main
+      uses: alexiri/update-image-action@1.0
       with:
         imageref: ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ matrix.VERSION_MAJOR }}
         baseref: quay.io/almalinuxorg/almalinux-bootc:${{ matrix.VERSION_MAJOR }}
