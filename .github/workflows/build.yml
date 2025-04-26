@@ -108,6 +108,7 @@ jobs:
       uses: alexiri/update-image-action@main
       with:
         imageref: ${{ env.IMAGE_DEST }}/${{ env.IMAGE_NAME }}:${{ matrix.VERSION_MAJOR }}
+        baseref: quay.io/almalinuxorg/almalinux-bootc:${{ matrix.VERSION_MAJOR }}
 
     - uses: actions/checkout@v4
       if: ${{ steps.check_update.outputs.rebuild-needed == 'true' || inputs.FORCE_REBUILD }}
