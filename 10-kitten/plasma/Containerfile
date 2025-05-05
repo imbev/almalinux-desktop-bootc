@@ -18,6 +18,8 @@ RUN /scripts/fedora-branding-remove.sh
 
 RUN /scripts/flathub-repo.sh
 
+RUN /scripts/flatpak-preinstall.sh
+
 RUN /scripts/bootc-update-noapply.sh
 
 RUN /scripts/lint.sh
